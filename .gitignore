@@ -9,6 +9,9 @@
 *.jpeg
 *.eps
 
+#ignore the jhadd exe
+jhadd
+
 #Root
 *.root
 
