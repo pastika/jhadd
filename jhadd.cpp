@@ -1,38 +1,51 @@
-//#include <string.h>
-//#include "TChain.h"
 #include "TFile.h"
 #include "TH1.h"
 #include "TTree.h"
 #include "TKey.h"
 #include "TBranch.h"
 #include "TVirtualIndex.h"
-//#include "Riostream.h"
 
-#include <iostream>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <utility>
 #include <string>
 #include <vector>
+#include <algorithm>
 #include "getopt.h"
 
 void hadd(std::string& targetName, std::vector<std::string>& sources);
 void MergeRootfile(std::map<std::pair<std::string, std::string>, TObject*>& outputMap, std::vector<std::pair<std::string, TObject*> >& outputVec, TDirectory *target, TFile *source);
 
+// list of temporary files where TTrees are stored
 std::vector<std::pair<std::string, TFile*> > tmpFiles;
+
+// option parameters
+bool isForce = false;
+int verbosity = 2;
 
 void hadd(std::string& targetName, std::vector<std::string>& sources)
 {
     using namespace std;
-    TFile* target = TFile::Open(targetName.c_str(), "RECREATE");
+    TFile* target = 0;
+    if(isForce) target = TFile::Open(targetName.c_str(), "RECREATE");
+    else        target = TFile::Open(targetName.c_str(),   "CREATE");
+    if(!target)
+    {
+        printf("target file already exists! (use -f to force recreation)\n");
+        exit(0);
+    }
 
     map<pair<string, string>, TObject*> outputMap;
     vector<pair<string, TObject*> > outputVec;
 
     for(vector<string>::const_iterator iF = sources.begin(); iF != sources.end(); ++iF)
     {
-        cout << *iF << endl;
+        if(verbosity >= 2) 
+        {
+            printf("Processing source file: %s\n", iF->c_str());
+            fflush(stdout);
+        }
         TFile * f = new TFile(iF->c_str());
         MergeRootfile(outputMap, outputVec, f, f);
         f->Close();
@@ -75,6 +88,12 @@ void hadd(std::string& targetName, std::vector<std::string>& sources)
             }
         }
     }
+    
+    if(verbosity >= 3)
+    {
+        printf("Results written to target file: %s\n", target->GetName());
+        fflush(stdout);
+    }
 
     target->Close();
     for(vector<pair<string, TFile*> >::const_iterator iF = tmpFiles.begin(); iF != tmpFiles.end(); ++iF)
@@ -91,10 +110,10 @@ void hadd(std::string& targetName, std::vector<std::string>& sources)
 void MergeRootfile(std::map<std::pair<std::string, std::string>, TObject*>& outputMap, std::vector<std::pair<std::string, TObject*> >& outputVec, TDirectory *target, TFile *source)
 {
     using namespace std;
-    TString path( (char*)strstr( target->GetPath(), ":" ) );
-    path.Remove( 0, 2 );
+    string path(target->GetPath());
+    path = path.substr(path.find(":") + 1);
 
-    source->cd( path );
+    source->cd(path.c_str());
     TDirectory *current_sourcedir = gDirectory;
     //gain time, do not add the objects in the list in memory
     Bool_t status = TH1::AddDirectoryStatus();
@@ -110,12 +129,16 @@ void MergeRootfile(std::map<std::pair<std::string, std::string>, TObject*>& outp
         oldkey = key;
 
         // read object from source file
-        source->cd( path );
+        source->cd(path.c_str());
         TObject *obj = key->ReadObj();
 
         if(obj->IsA()->InheritsFrom(TH1::Class()))
         {
-            //cout << "Histogram " << obj->GetName() << endl;
+            if(verbosity >= 4) 
+            {
+                printf("| Found TH1: %s\n", obj->GetName());
+                fflush(stdout);
+            }
             string path(target->GetPath());
             pair<string, string> okey(path.substr(path.find(':') + 2), obj->GetName());
             //cout << okey.first << "\t" << okey.second << endl;
@@ -133,6 +156,11 @@ void MergeRootfile(std::map<std::pair<std::string, std::string>, TObject*>& outp
         else if(obj->IsA()->InheritsFrom(TTree::Class()))
         {
             string path(target->GetPath());
+            if(verbosity >= 4) 
+            {
+                printf("| Found Tree: %s\n", obj->GetName());
+                fflush(stdout);
+            }
             pair<string, string> okey(path.substr(path.find(':') + 2), obj->GetName());
             if(outputMap.find(okey) == outputMap.end())
             {
@@ -164,7 +192,11 @@ void MergeRootfile(std::map<std::pair<std::string, std::string>, TObject*>& outp
         }
         else if(obj->IsA()->InheritsFrom(TDirectory::Class()))
         {
-            //cout << "Found subdirectory " << obj->GetName() << "\t" << ((TDirectory*)obj)->GetPath() << endl;
+            if(verbosity >= 3) 
+            {
+                printf("Hadding Directory: %s\n", ((TDirectory*)obj)->GetPath());
+                fflush(stdout);
+            }
             string path(((TDirectory*)obj)->GetPath());
             pair<string, string> okey(path.substr(path.find(':') + 2), " -------- ");
             if(outputMap.find(okey) == outputMap.end())
@@ -176,8 +208,8 @@ void MergeRootfile(std::map<std::pair<std::string, std::string>, TObject*>& outp
         }
         else
         {
-            cout << "Unknown object type, name: "
-                    << obj->GetName() << " title: " << obj->GetTitle() << endl;
+            printf("Unknown object type, name: %s title: %s\n", obj->GetName(), obj->GetTitle());
+            fflush(stdout);
         }
     } // while ( ( TKey *key = (TKey*)nextkey() ) )
 }
@@ -190,36 +222,55 @@ int main(int argn, char * argv[])
     int opt;
     int option_index = 0;
     static struct option long_options[] = {
-        {"readEeproms",       no_argument, 0, 'r'},
-        {"margUpTime",  required_argument, 0, 'U'},
+        {"force",          no_argument, 0, 'f'},
+        {"verbose",  required_argument, 0, 'v'},
     };
 
-    while((opt = getopt_long(argn, argv, "rU:", long_options, &option_index)) != -1)
+    while((opt = getopt_long(argn, argv, "fv:", long_options, &option_index)) != -1)
     {
         switch (opt)
         {
-            case 'r':
+            case 'f':
+                isForce = true;
+                break;
+            case 'v':
+                verbosity = int(atoi(optarg));
                 break;
         }
     }
 
-    vector<string> sources;
-
-    if(argn <= 1)
+    if(argn - optind < 1)
     {
         printf("No target specified\n");
         exit(0);
     }
-    string target(argv[1]);
-
-    if(argn <= 2)
+    string target(argv[optind]);
+    if(verbosity >= 1)
+    {
+        printf("Target file: %s\n", target.c_str());
+        fflush(stdout);
+    }
+    
+    vector<string> sources;
+    if(argn - optind < 2)
     {
         printf("No sources specified\n");
         exit(0);
     }
-    for(int i = 2; i < argn; i++)
+    for(int i = optind + 1; i < argn; i++)
     {
         sources.push_back(argv[i]);
+        if(verbosity == 1)
+        {
+            printf("Source file: %s\n", sources.back().c_str());
+            fflush(stdout);
+        }
+    }
+    
+    if(find(sources.begin(), sources.end(), target) != sources.end())
+    {
+        printf("Source list includes target file!!!\n");
+        exit(0);
     }
 
     hadd(target, sources);
