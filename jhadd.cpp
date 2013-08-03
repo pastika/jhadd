@@ -5,6 +5,7 @@
 #include "TTree.h"
 #include "TKey.h"
 #include "TBranch.h"
+#include "TVirtualIndex.h"
 //#include "Riostream.h"
 
 #include <iostream>
@@ -65,12 +66,12 @@ void hadd(std::string& targetName, std::vector<std::string>& sources)
             if(iO->second->IsA()->InheritsFrom(TH1::Class())) iO->second->Write();
             else
             {
-                //TTree* tree = ((TTree*)iO->second)->CloneTree();
-                //tree->SetAutoSave(2000000000);
-                //tree->SetCircular(0);
-                //tree->CopyEntries((TTree*)iO->second);
-                //tree->Write();
-                iO->second->Write();
+                if(iO->second && ((TTree*)iO->second)->GetTreeIndex()) ((TTree*)iO->second)->GetTreeIndex()->Append(0, kFALSE); // Force the sorting
+                TTree* tree = ((TTree*)iO->second)->CloneTree();
+                ((TTree*)iO->second)->GetListOfClones()->Remove(tree);
+                ((TTree*)iO->second)->ResetBranchAddresses();
+                tree->ResetBranchAddresses();
+                tree->Write();
             }
         }
     }
@@ -131,11 +132,8 @@ void MergeRootfile(std::map<std::pair<std::string, std::string>, TObject*>& outp
         }
         else if(obj->IsA()->InheritsFrom(TTree::Class()))
         {
-            //cout << "Histogram " << obj->GetName() << endl;
             string path(target->GetPath());
             pair<string, string> okey(path.substr(path.find(':') + 2), obj->GetName());
-            //It seems what needs to be done is to CloneTree the first tree, then CopyEntries the rest.  Do not use TChains
-            //cout << okey.first << "\t" << okey.second << endl;
             if(outputMap.find(okey) == outputMap.end())
             {
                 string fname(okey.first);
@@ -160,6 +158,7 @@ void MergeRootfile(std::map<std::pair<std::string, std::string>, TObject*>& outp
                     tm->Fill();
                 }
                 ts->ResetBranchAddresses();
+                if (tm->GetTreeIndex()) tm->GetTreeIndex()->Append(ts->GetTreeIndex(), kTRUE); 
                 ((TTree*)obj)->Delete();
             }
         }
